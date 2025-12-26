@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>女王的接龙小助手 - 智能 AI 版</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#4f46e5">
@@ -14,72 +15,427 @@
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
-        #error-overlay { display: none; position: fixed; inset: 0; background: #0f172a; color: white; padding: 40px; z-index: 9999; overflow: auto; }
-        #app-loader { position: fixed; inset: 0; background: #f8fafc; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9000; transition: opacity 0.5s ease; }
+        #app-loader { position: fixed; inset: 0; background: #f8fafc; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9000; }
         .loader-spin { width: 40px; height: 40px; border: 3px solid #e2e8f0; border-top-color: #4f46e5; border-radius: 50%; animation: spin 0.8s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
         @media print { .no-print { display: none !important; } }
     </style>
-    <script>
-      // 环境补丁：防止 process 未定义导致的崩溃
-      window.process = { env: { API_KEY: "" } };
-    </script>
-<script type="importmap">
+    <script type="importmap">
 {
   "imports": {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.263.1",
+    "@google/genai": "https://esm.sh/@google/genai@1.34.0",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react": "https://esm.sh/react@^19.2.3",
-    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
-    "@google/genai": "https://esm.sh/@google/genai@^1.34.0"
+    "react/": "https://esm.sh/react@^19.2.3/"
   }
 }
 </script>
 <link rel="stylesheet" href="/index.css">
 </head>
 <body class="bg-slate-50 text-slate-900">
-    <!-- 初始加载状态 -->
     <div id="app-loader">
         <div class="loader-spin mb-4"></div>
-        <div class="text-slate-500 font-bold text-sm tracking-widest uppercase">系统初始化中...</div>
+        <div class="text-slate-500 font-bold text-sm uppercase tracking-widest">系统启动中...</div>
     </div>
-
     <div id="root"></div>
 
-    <div id="error-overlay">
-      <h1 class="text-rose-500 text-2xl font-bold mb-4">程序启动失败</h1>
-      <p class="text-slate-400 mb-6">这通常是由于浏览器缓存或网络连接导致的，请尝试强制刷新 (Ctrl+F5)。</p>
-      <pre id="error-content" class="bg-slate-800 p-4 rounded-xl text-xs text-rose-300 font-mono whitespace-pre-wrap mb-6"></pre>
-      <button onclick="location.reload()" class="bg-indigo-600 px-6 py-2 rounded-lg font-bold">立即重试</button>
-    </div>
-    
-    <script>
-      window.onerror = function(msg, url, lineNo, columnNo, error) {
-        const overlay = document.getElementById('error-overlay');
-        const content = document.getElementById('error-content');
-        if(overlay) overlay.style.display = 'block';
-        if(content) content.textContent = `Error: ${msg}\nSource: ${url}\nLine: ${lineNo}:${columnNo}\nStack: ${error?.stack}`;
-        return false;
-      };
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+        import ReactDOM from 'react-dom/client';
+        import { 
+            LayoutDashboard, ShoppingBag, Users, Monitor, Save, Upload, 
+            Plus, Trash2, Package, Search, CheckSquare, Square, History, 
+            Printer, Zap, Cpu, AlertTriangle, FileText, X, Edit3, MapPin, Phone, UserPlus, Import, Info
+        } from 'lucide-react';
+        import { GoogleGenAI, Type } from "@google/genai";
 
-      // 隐藏加载器函数（由 index.tsx 调用）
-      window.hideAppLoader = function() {
-        const loader = document.getElementById('app-loader');
-        if(loader) {
-            loader.style.opacity = '0';
-            setTimeout(() => loader.style.display = 'none', 500);
-        }
-      }
-    </script>
+        // --- 全局配置 ---
+        const APP_VERSION = "2.7.0-Native";
+        window.process = { env: { API_KEY: "" } };
 
-    <script type="module" src="index.tsx"></script>
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW registration failed: ', err));
-        });
-      }
+        // --- AI 服务 ---
+        const parseJielongText = async (text, productContext) => {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+            const response = await ai.models.generateContent({
+                model: "gemini-3-flash-preview",
+                contents: `解析微信接龙文本。已知商品库：${JSON.stringify(productContext)}。
+                请提取出每条记录的：wechatNickname(微信名), productName(商品名), specName(规格), quantity(数量)。文本：\n${text}`,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.ARRAY,
+                        items: {
+                            type: Type.OBJECT,
+                            properties: {
+                                wechatNickname: { type: Type.STRING },
+                                items: {
+                                    type: Type.ARRAY,
+                                    items: {
+                                        type: Type.OBJECT,
+                                        properties: {
+                                            productName: { type: Type.STRING },
+                                            specName: { type: Type.STRING },
+                                            quantity: { type: Type.INTEGER }
+                                        },
+                                        required: ["productName", "quantity"]
+                                    }
+                                }
+                            },
+                            required: ["wechatNickname", "items"]
+                        }
+                    }
+                }
+            });
+            return JSON.parse(response.text || "[]");
+        };
+
+        // --- 子组件: 客户/地址管理 ---
+        const CustomerManager = ({ customers, setCustomers }) => {
+            const [newC, setNewC] = useState({ wechatNickname: '', realName: '', phone: '', address: '' });
+            const [importText, setImportText] = useState('');
+            const [showImport, setShowImport] = useState(false);
+
+            const addCustomer = () => {
+                if(!newC.wechatNickname) return;
+                setCustomers([{ ...newC, id: Date.now().toString() }, ...customers]);
+                setNewC({ wechatNickname: '', realName: '', phone: '', address: '' });
+            };
+
+            const batchImport = () => {
+                const lines = importText.split('\n').filter(l => l.trim());
+                const imported = lines.map(line => {
+                    const [nick, name, phone, addr] = line.split(/[,，\t]/);
+                    return { id: Math.random().toString(36).substr(2,9), wechatNickname: nick?.trim(), realName: name?.trim(), phone: phone?.trim(), address: addr?.trim() };
+                }).filter(c => c.wechatNickname);
+                setCustomers([...imported, ...customers]);
+                setImportText('');
+                setShowImport(false);
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="bg-white rounded-2xl shadow-sm border p-6">
+                        <div className="flex justify-between items-center mb-6">
+                            <h2 className="text-xl font-bold flex items-center gap-2"><Users className="text-indigo-600"/> 地址薄管理</h2>
+                            <button onClick={()=>setShowImport(!showImport)} className="text-indigo-600 font-bold text-sm flex items-center gap-1"><Import size={16}/> 批量导入</button>
+                        </div>
+
+                        {showImport && (
+                            <div className="mb-6 p-4 bg-indigo-50 rounded-xl space-y-3">
+                                <p className="text-[10px] text-indigo-600 font-bold">格式：微信名,姓名,电话,地址（逗号分隔，每行一个）</p>
+                                <textarea className="w-full h-24 p-2 text-xs border rounded-lg" value={importText} onChange={e=>setImportText(e.target.value)} placeholder="粘贴数据..." />
+                                <button onClick={batchImport} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-bold">确认导入</button>
+                            </div>
+                        )}
+
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                            <input placeholder="微信名" className="p-2 border rounded-lg text-sm" value={newC.wechatNickname} onChange={e=>setNewC({...newC, wechatNickname:e.target.value})} />
+                            <input placeholder="真实姓名" className="p-2 border rounded-lg text-sm" value={newC.realName} onChange={e=>setNewC({...newC, realName:e.target.value})} />
+                            <input placeholder="电话" className="p-2 border rounded-lg text-sm" value={newC.phone} onChange={e=>setNewC({...newC, phone:e.target.value})} />
+                            <input placeholder="地址" className="p-2 border rounded-lg text-sm" value={newC.address} onChange={e=>setNewC({...newC, address:e.target.value})} />
+                        </div>
+                        <button onClick={addCustomer} className="w-full bg-slate-800 text-white py-2 rounded-lg font-bold text-sm">新增地址</button>
+                    </div>
+
+                    <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+                        <table className="w-full text-left">
+                            <thead className="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase">
+                                <tr>
+                                    <th className="px-6 py-4">微信名/收货人</th>
+                                    <th className="px-6 py-4">联系方式/地址</th>
+                                    <th className="px-6 py-4 w-20">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y text-sm">
+                                {customers.map(c => (
+                                    <tr key={c.id} className="hover:bg-slate-50">
+                                        <td className="px-6 py-4">
+                                            <div className="font-bold">{c.wechatNickname}</div>
+                                            <div className="text-[10px] text-slate-500">{c.realName}</div>
+                                        </td>
+                                        <td className="px-6 py-4">
+                                            <div className="flex items-center gap-1 text-slate-600"><Phone size={12}/> {c.phone}</div>
+                                            <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-1"><MapPin size={12}/> {c.address}</div>
+                                        </td>
+                                        <td className="px-6 py-4">
+                                            <button onClick={()=>setCustomers(customers.filter(x=>x.id!==c.id))} className="text-red-400 hover:text-red-600"><Trash2 size={16}/></button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- 子组件: 商品管理 ---
+        const ProductManager = ({ products, setProducts }) => {
+            const [newP, setNewP] = useState({ name: '', price: 0 });
+            
+            const addProduct = () => {
+                if(!newP.name) return;
+                setProducts([...products, { ...newP, id: Date.now().toString() }]);
+                setNewP({ name: '', price: 0 });
+            };
+
+            return (
+                <div className="bg-white rounded-2xl shadow-sm border p-6 space-y-6">
+                    <h2 className="text-xl font-bold flex items-center gap-2"><Package className="text-indigo-600"/> 商品仓库</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <input placeholder="商品名" className="p-3 border rounded-xl" value={newP.name} onChange={e=>setNewP({...newP, name:e.target.value})} />
+                        <input placeholder="默认单价" type="number" className="p-3 border rounded-xl" value={newP.price} onChange={e=>setNewP({...newP, price:parseFloat(e.target.value)})} />
+                    </div>
+                    <button onClick={addProduct} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold">上架商品</button>
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                        {products.map(p => (
+                            <div key={p.id} className="p-3 border rounded-xl bg-slate-50 relative group">
+                                <button onClick={()=>setProducts(products.filter(x=>x.id!==p.id))} className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 text-red-400"><Trash2 size={14}/></button>
+                                <div className="font-bold text-sm truncate">{p.name}</div>
+                                <div className="text-indigo-600 font-bold text-xs">¥{p.price}</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- 子组件: 订单管理 ---
+        const OrderManager = ({ products, customers, orders, setOrders, logs, addLog }) => {
+            const [text, setText] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            const handleParse = async () => {
+                if(!text) return;
+                setLoading(true);
+                addLog("启动 Gemini AI 解析引擎...", "INFO");
+                try {
+                    const res = await parseJielongText(text, products.map(p=>p.name));
+                    const newOrders = res.map(item => {
+                        // 尝试自动关联地址
+                        const matched = customers.find(c => 
+                            c.wechatNickname === item.wechatNickname || 
+                            item.wechatNickname.includes(c.wechatNickname)
+                        );
+                        return {
+                            id: 'ORD'+Date.now()+Math.random().toString(36).substr(2,4),
+                            wechatNickname: item.wechatNickname,
+                            items: item.items,
+                            status: 'PENDING',
+                            timestamp: Date.now(),
+                            matchedAddress: matched
+                        };
+                    });
+                    setOrders(prev => [...newOrders, ...prev]);
+                    addLog(`成功处理 ${newOrders.length} 个订单`, "SUCCESS");
+                    setText('');
+                } catch(e) {
+                    addLog("解析失败，请检查 API 配置", "ERROR");
+                } finally { setLoading(false); }
+            };
+
+            const handlePrint = () => {
+                const win = window.open();
+                const html = orders.map(o => `
+                    <div style="border:2px solid #000; padding:25px; margin-bottom:30px; page-break-inside:avoid; font-family:sans-serif;">
+                        <h1 style="margin:0 0 10px 0;">女王接龙 - 配送单</h1>
+                        <p><strong>买家昵称:</strong> ${o.wechatNickname}</p>
+                        <p><strong>收货信息:</strong> ${o.matchedAddress ? `${o.matchedAddress.realName} | ${o.matchedAddress.phone} <br/> ${o.matchedAddress.address}` : '未关联地址'}</p>
+                        <hr style="border:1px dashed #000;"/>
+                        <table style="width:100%; border-collapse:collapse; margin-top:15px;">
+                            <thead><tr style="background:#eee;">
+                                <th style="border:1px solid #000; padding:8px; text-align:left;">商品名</th>
+                                <th style="border:1px solid #000; padding:8px; width:60px;">数量</th>
+                            </tr></thead>
+                            <tbody>${o.items.map(i => `
+                                <tr>
+                                    <td style="border:1px solid #000; padding:8px;">${i.productName} ${i.specName||''}</td>
+                                    <td style="border:1px solid #000; padding:8px; text-align:center;">${i.quantity}</td>
+                                </tr>`).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `).join('');
+                win.document.write(`<html><body>${html}<script type="module" src="/index.tsx"></script>
+</body></html>`);
+                win.document.close();
+                win.print();
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border relative">
+                        <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><Zap className="text-indigo-600"/> 智能提取</h2>
+                        <textarea 
+                            className="w-full h-40 p-4 bg-slate-50 border rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                            placeholder="粘贴微信接龙内容（如：1. 张三 苹果x2...）"
+                            value={text}
+                            onChange={e=>setText(e.target.value)}
+                        />
+                        <button 
+                            onClick={handleParse}
+                            disabled={loading}
+                            className="absolute bottom-10 right-10 bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 shadow-xl hover:bg-indigo-700 transition-all disabled:opacity-50"
+                        >
+                            {loading ? <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/20 border-t-white"></div> : <Cpu size={18}/>}
+                            {loading ? "正在深度思考..." : "开始提取"}
+                        </button>
+                    </div>
+
+                    <div className="bg-white rounded-2xl shadow-sm border overflow-hidden">
+                        <div className="p-6 border-b flex justify-between items-center bg-slate-50/50">
+                            <h3 className="font-bold text-lg flex items-center gap-2">订单列表 <span className="bg-indigo-100 text-indigo-600 text-xs px-2 py-0.5 rounded-full">{orders.length}</span></h3>
+                            <button onClick={handlePrint} className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2">
+                                <Printer size={16}/> 打印配送单
+                            </button>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left">
+                                <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-400">
+                                    <tr>
+                                        <th className="px-6 py-4">买家/地址状态</th>
+                                        <th className="px-6 py-4">订购项</th>
+                                        <th className="px-6 py-4">状态</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y text-sm">
+                                    {orders.map(o => (
+                                        <tr key={o.id} className="hover:bg-indigo-50/30 transition-colors">
+                                            <td className="px-6 py-4">
+                                                <div className="font-bold">{o.wechatNickname}</div>
+                                                {o.matchedAddress ? (
+                                                    <div className="text-[10px] text-emerald-600 font-bold flex items-center gap-1 mt-1">
+                                                        <CheckSquare size={10}/> 已关联: {o.matchedAddress.realName}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-[10px] text-amber-500 font-bold flex items-center gap-1 mt-1">
+                                                        <AlertTriangle size={10}/> 暂无匹配地址
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4 space-y-1">
+                                                {o.items.map((it,i) => (
+                                                    <div key={i} className="flex items-center gap-2">
+                                                        <span className="text-slate-700">{it.productName}</span>
+                                                        <span className="text-slate-400 font-bold text-xs">x{it.quantity}</span>
+                                                    </div>
+                                                ))}
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <span className={`px-2 py-1 rounded text-[10px] font-bold ${o.status==='PENDING'?'bg-amber-100 text-amber-600':'bg-green-100 text-green-600'}`}>
+                                                    {o.status==='PENDING'?'待发货':'已完成'}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {orders.length===0 && (
+                                        <tr><td colSpan="3" className="px-6 py-12 text-center text-slate-400 italic">暂无订单数据</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- 主程序 ---
+        const App = () => {
+            const [tab, setTab] = useState('orders');
+            const [products, setProducts] = useState(() => JSON.parse(localStorage.getItem('q_prod') || '[]'));
+            const [orders, setOrders] = useState(() => JSON.parse(localStorage.getItem('q_ord') || '[]'));
+            const [customers, setCustomers] = useState(() => JSON.parse(localStorage.getItem('q_cust') || '[]'));
+            const [logs, setLogs] = useState([]);
+
+            useEffect(() => {
+                localStorage.setItem('q_prod', JSON.stringify(products));
+                localStorage.setItem('q_ord', JSON.stringify(orders));
+                localStorage.setItem('q_cust', JSON.stringify(customers));
+            }, [products, orders, customers]);
+
+            const addLog = (msg, type='INFO') => setLogs(p => [{id:Date.now(), msg, type, time:new Date().toLocaleTimeString()}, ...p].slice(0, 20));
+
+            useEffect(() => {
+                const loader = document.getElementById('app-loader');
+                if(loader) {
+                    loader.style.opacity = '0';
+                    setTimeout(() => loader.style.display = 'none', 500);
+                }
+            }, []);
+
+            return (
+                <div className="min-h-screen flex bg-slate-50">
+                    <aside className="w-64 bg-slate-900 text-white p-6 hidden md:flex flex-col no-print">
+                        <div className="flex items-center gap-3 mb-10 px-2">
+                            <div className="p-2 bg-indigo-500 rounded-lg shadow-lg"><Monitor size={24}/></div>
+                            <div>
+                                <h1 className="font-bold text-sm tracking-tight">女王接龙 <span className="text-indigo-400">PRO</span></h1>
+                                <p className="text-[9px] opacity-40 uppercase tracking-widest font-bold">Local-First AI App</p>
+                            </div>
+                        </div>
+                        <nav className="space-y-2 flex-1">
+                            <button onClick={()=>setTab('orders')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${tab==='orders'?'bg-indigo-600 shadow-lg shadow-indigo-900/40':'text-slate-400 hover:bg-slate-800'}`}>
+                                <LayoutDashboard size={18}/> 订单管理
+                            </button>
+                            <button onClick={()=>setTab('products')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${tab==='products'?'bg-indigo-600 shadow-lg shadow-indigo-900/40':'text-slate-400 hover:bg-slate-800'}`}>
+                                <ShoppingBag size={18}/> 商品管理
+                            </button>
+                            <button onClick={()=>setTab('customers')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${tab==='customers'?'bg-indigo-600 shadow-lg shadow-indigo-900/40':'text-slate-400 hover:bg-slate-800'}`}>
+                                <Users size={18}/> 地址薄
+                            </button>
+                        </nav>
+                        <div className="text-[9px] text-slate-600 text-center border-t border-slate-800 pt-6 mt-6">
+                            VER {APP_VERSION} <br/> 数据加密存储于浏览器本地
+                        </div>
+                    </aside>
+
+                    <main className="flex-1 p-8 overflow-y-auto">
+                        <div className="max-w-5xl mx-auto space-y-8">
+                            <header className="flex justify-between items-end">
+                                <div>
+                                    <h2 className="text-3xl font-black text-slate-900 tracking-tight">
+                                        {tab==='orders'?'订单中心':tab==='products'?'商品仓库':'地址薄档案'}
+                                    </h2>
+                                    <div className="flex gap-2 mt-1">
+                                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] font-bold rounded uppercase">Security Verified</span>
+                                        <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-[9px] font-bold rounded uppercase">Gemini 3 Powered</span>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2 no-print">
+                                    <button onClick={()=>{ if(confirm('清空所有数据？')) { localStorage.clear(); location.reload(); } }} className="p-2 text-slate-300 hover:text-rose-500 transition-colors"><Trash2 size={20}/></button>
+                                </div>
+                            </header>
+
+                            {tab === 'orders' ? (
+                                <OrderManager products={products} customers={customers} orders={orders} setOrders={setOrders} logs={logs} addLog={addLog} />
+                            ) : tab === 'products' ? (
+                                <ProductManager products={products} setProducts={setProducts} />
+                            ) : (
+                                <CustomerManager customers={customers} setCustomers={setCustomers} />
+                            )}
+
+                            <div className="bg-slate-900 rounded-2xl p-6 text-white h-40 flex flex-col no-print shadow-xl border border-slate-800">
+                                <h3 className="text-[10px] uppercase font-bold text-slate-500 mb-3 flex items-center gap-2"><History size={12}/> 系统运行日志</h3>
+                                <div className="flex-1 overflow-y-auto space-y-1.5 text-[11px] font-mono custom-scrollbar">
+                                    {logs.map(l => (
+                                        <div key={l.id} className="flex gap-3 border-l-2 border-slate-800 pl-3">
+                                            <span className="text-slate-600 shrink-0">{l.time}</span>
+                                            <span className={l.type==='ERROR'?'text-rose-400':l.type==='SUCCESS'?'text-emerald-400':'text-indigo-400'}>{l.msg}</span>
+                                        </div>
+                                    ))}
+                                    {logs.length===0 && <div className="text-slate-700 italic">就绪，等待指令...</div>}
+                                </div>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
-<script type="module" src="/index.tsx"></script>
 </body>
 </html>

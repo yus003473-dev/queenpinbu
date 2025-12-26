@@ -1,6 +1,7 @@
+
 {
-  "name": "Copy of 女王的接龙小助手",
-  "description": "本地脱机运行的私域销售工具。支持 PWA 安装、本地智能解析接龙、地址自动匹配及订单全生命周期管理。",
+  "name": "女王的接龙小助手 - AI 极速版",
+  "description": "专为 GitHub Pages 优化的单文件 React 应用。支持 PWA 离线运行、AI 智能提取微信接龙、本地隐私存储及批量拣货单打印。",
   "requestFramePermissions": [
     "camera"
   ]
